@@ -1,0 +1,558 @@
+
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8"/>
+        <title>kepler.gl embedded map</title>
+
+        <!--Uber Font-->
+        <link rel="stylesheet" href="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/uber-fonts/4.0.0/superfine.css">
+
+        <!--Kepler css-->
+        <link href="https://unpkg.com/kepler.gl@3.3.0-alpha.29/umd/keplergl.min.css" rel="stylesheet">
+
+        <!--MapBox css-->
+        <link href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.1.1/mapbox-gl.css" rel="stylesheet">
+        <link href="https://unpkg.com/maplibre-gl@^3/dist/maplibre-gl.css" rel="stylesheet">
+
+        <!-— facebook open graph tags -->
+        <meta property="og:url" content="http://kepler.gl/" />
+        <meta property="og:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool" />
+        <meta property="og:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets." />
+        <meta property="og:site_name" content="kepler.gl" />
+        <meta property="og:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="800" />
+        <meta property="og:image:height" content="800" />
+
+        <!-— twitter card tags -->
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:site" content="@openjsf">
+        <meta name="twitter:creator" content="@openjsf">
+        <meta name="twitter:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool">
+        <meta name="twitter:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets.">
+        <meta name="twitter:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+
+        <!--
+          Load React/Redux and the other UMD peer dependencies as ES modules.
+          React >= 19 no longer ships UMD builds, so we pull everything from an
+          ESM CDN (esm.sh) and re-expose them on window as the globals that the
+          kepler.gl UMD bundle (and the inline scripts below) expect.
+
+          IMPORTANT: this file must keep working as a standalone file, i.e. opened
+          directly from disk via the file:// protocol. Native ES module scripts
+          are always fetched with CORS semantics and a file:// document has an
+          opaque (null) origin, so the browser refuses to load native modules or
+          import maps locally. To keep the standalone-file behaviour we run
+          es-module-shims in "shim mode" (importmap-shim / module-shim tags): it
+          is a classic script (loads fine from file://) that resolves the import
+          map and executes the modules as blob: URLs, sidestepping that
+          restriction. The import map pins a single React instance and uses
+          external= so react-redux / styled-components reuse it (otherwise React
+          hooks break).
+        -->
+        <script>
+          // Trigger es-module-shims "shim mode" so it always parses the
+          // importmap-shim / module-shim tags below instead of deferring to the
+          // native loader (which fails under file://).
+          window.esmsInitOptions = {shimMode: true};
+        </script>
+        <script>
+          // Replace the loading overlay with an error message.
+          // Safe to call at any time — once React has mounted and removed
+          // #kepler-load-screen this becomes a no-op.
+          window._keplerShowLoadError = function(msg) {
+            var loadScreen = document.getElementById('kepler-load-screen');
+            if (!loadScreen) return;
+            var spinner = loadScreen.querySelector('.kepler-spinner');
+            var label = loadScreen.querySelector('.kepler-load-label');
+            if (spinner) spinner.style.display = 'none';
+            if (label) label.style.display = 'none';
+            var errEl = document.createElement('div');
+            errEl.className = 'kepler-load-error';
+            errEl.textContent = msg || 'Failed to load the map. Check your internet connection and reload the page.';
+            loadScreen.appendChild(errEl);
+          };
+          // Catch unhandled promise rejections (e.g. ES module imports failing
+          // inside the module-shim script before loadScript is ever called).
+          window.addEventListener('unhandledrejection', function(event) {
+            console.error('kepler.gl: unhandled rejection during map load', event.reason);
+            window._keplerShowLoadError('Failed to load the map. Check your internet connection and reload the page.');
+          });
+        </script>
+        <script src="https://unpkg.com/es-module-shims@2.8.1/dist/es-module-shims.js" crossorigin="anonymous"></script>
+        
+        <script type="importmap-shim">
+          {
+            "imports": {
+              "react": "https://esm.sh/react@19.1.0",
+              "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime",
+              "react-dom": "https://esm.sh/react-dom@19.1.0?external=react",
+              "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?external=react",
+              "redux": "https://esm.sh/redux@5.0.1",
+              "react-redux": "https://esm.sh/react-redux@9.3.0?external=react,react-dom,redux",
+              "styled-components": "https://esm.sh/styled-components@6.1.19?external=react,react-dom"
+            }
+          }
+        </script>
+
+        <!--
+          Expose the ES modules as globals for the UMD kepler.gl bundle, then load
+          the kepler.gl UMD script and the app bootstrap script only after those
+          globals are available. The kepler.gl UMD bundle is a classic script
+          (which loads fine from file://), so it is injected dynamically here once
+          the globals are in place to guarantee the correct ordering.
+        -->
+        <script type="module-shim">
+          import * as React from 'react';
+          import * as ReactDOM from 'react-dom';
+          import * as ReactDOMClient from 'react-dom/client';
+          import * as Redux from 'redux';
+          import * as ReactRedux from 'react-redux';
+          import * as StyledComponents from 'styled-components';
+
+          // esm.sh namespaces expose the module's default export under .default.
+          // Normalize so the globals match the shape the React 18 UMD builds had:
+          // - React / Redux / ReactRedux keep their full namespace (named exports).
+          // - ReactDOM merges the classic + client entry so both createPortal and
+          //   createRoot are available (createRoot moved to react-dom/client in v19).
+          // - styled-components' global must be the callable default (styled) with
+          //   its named exports (ThemeProvider, withTheme, css, keyframes, ...)
+          //   attached, since the kepler.gl bundle relies on both.
+          window.React = React.default || React;
+          window.ReactDOM = Object.assign({}, ReactDOM.default || ReactDOM, ReactDOMClient);
+          window.Redux = Redux.default || Redux;
+          window.ReactRedux = ReactRedux.default || ReactRedux;
+          window.styled = Object.assign(StyledComponents.default, StyledComponents);
+
+          function loadScript(src) {
+            return new Promise(function(resolve, reject) {
+              var script = document.createElement('script');
+              script.src = src;
+              script.crossOrigin = 'anonymous';
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          }
+
+          // Load the kepler.gl UMD bundle after the globals are in place, then run
+          // the app bootstrap scripts (marked as type="text/kepler-bootstrap").
+          loadScript("https://unpkg.com/kepler.gl@3.3.0-alpha.29/umd/keplergl.min.js")
+            .then(function() {
+              var bootstraps = document.querySelectorAll('script[type="text/kepler-bootstrap"]');
+              bootstraps.forEach(function(node) {
+                var script = document.createElement('script');
+                script.text = node.textContent;
+                document.body.appendChild(script);
+              });
+            })
+            .catch(function(error) {
+              console.error('kepler.gl: failed to load UMD bundle', error);
+              window._keplerShowLoadError('Failed to load the map bundle. Check your internet connection and reload the page.');
+            });
+        </script>
+        <style type="text/css">
+          body {margin: 0; padding: 0; overflow: hidden;}
+          #kepler-load-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #29323c;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 9999;
+            font-family: ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif;
+            color: #a0a7b4;
+          }
+          #kepler-load-screen .kepler-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid rgba(255,255,255,0.08);
+            border-top-color: #1fbad6;
+            border-radius: 50%;
+            animation: kepler-spin 0.8s linear infinite;
+          }
+          #kepler-load-screen .kepler-load-label {
+            font-size: 13px;
+            letter-spacing: 0.5px;
+          }
+          #kepler-load-screen .kepler-load-error {
+            font-size: 13px;
+            color: #f05e45;
+            max-width: 360px;
+            text-align: center;
+            line-height: 1.5;
+          }
+          @keyframes kepler-spin { to { transform: rotate(360deg); } }
+        </style>
+
+        <!--MapBox token-->
+        <!--
+          SECURITY NOTE: Your Mapbox access token is embedded below in plain text.
+          Anyone with access to this HTML file can see and use this token.
+          Consider using a scoped token with URL restrictions to limit misuse.
+          See: https://docs.mapbox.com/accounts/guides/tokens/#url-restrictions
+        -->
+        <script>
+          /**
+           * Provide your MapBox Token
+           **/
+          window.MAPBOX_TOKEN = "pk.eyJ1IjoidWNmLW1hcGJveCIsImEiOiJjbDBiYzlveHgwdnF0M2NtZzUzZWZuNWZ4In0.l9J8ptz3MKwaU9I4PtCcig";
+          window.WARNING_MESSAGE = 'No Mapbox token provided. Mapbox basemaps will not be available. To enable them, edit this file and set MAPBOX_TOKEN to your Mapbox access key.';
+        </script>
+      </head>
+      <body>
+        <!-- We will put our React component inside this div. -->
+        <div id="app">
+          <div id="kepler-load-screen">
+            <div class="kepler-spinner"></div>
+            <div class="kepler-load-label">Loading map…</div>
+          </div>
+        </div>
+
+        <!--
+          Load our React component. This script is not executed inline: it is run
+          by the module shim in <head> once the kepler.gl UMD bundle (and its
+          global peer dependencies) have finished loading.
+        -->
+        <script type="text/kepler-bootstrap">
+          /* Validate Mapbox Token */
+          if ((MAPBOX_TOKEN || '') === '' || MAPBOX_TOKEN === 'PROVIDE_MAPBOX_TOKEN') {
+            console.warn('[kepler.gl]', WARNING_MESSAGE);
+          }
+
+          const branding = {"appName":"kepler.gl","appWebsite":"http://kepler.gl/","appIcon":null,"appNameColor":"#1FBAD6"};
+
+          /** STORE **/
+          // Pre-seed styleType so the correct basemap fetch starts on the very
+          // first render, avoiding a flash of the default dark basemap.
+          // options.config has the versioned envelope shape: { version, config: { mapStyle, ... } }
+          const savedStyleType = "dark-matter";
+
+          const reducers = (function createReducers(redux, keplerGl, styleType) {
+            return redux.combineReducers({
+              // mount keplerGl reducer
+              keplerGl: keplerGl.keplerGlReducer.initialState({
+                uiState: {
+                  readOnly: true,
+                  currentModal: null,
+                  exportMap: Object.assign({}, keplerGl.INITIAL_UI_STATE.exportMap, branding)
+                },
+                ...(styleType ? {mapStyle: {styleType}} : {})
+              })
+            });
+          }(Redux, KeplerGl, savedStyleType));
+
+          const middleWares = (function createMiddlewares(keplerGl) {
+            return keplerGl.enhanceReduxMiddleware([
+              // Add other middlewares here
+            ]);
+          }(KeplerGl));
+
+          const enhancers = (function craeteEnhancers(redux, middles) {
+            return redux.applyMiddleware(...middles);
+          }(Redux, middleWares));
+
+          const store = (function createStore(redux, enhancers) {
+            return redux.createStore(
+              reducers,
+              {},
+              redux.compose(enhancers)
+            );
+          }(Redux, enhancers));
+          /** END STORE **/
+
+          /** COMPONENTS **/
+          var BrandLogo = (function createBrandLogo(react, branding) {
+            return function BrandLogo(props) {
+              var fixed = Boolean(props && props.fixed);
+              var icon = branding.appIcon
+                ? react.createElement("img", {
+                    src: branding.appIcon,
+                    alt: "",
+                    "aria-hidden": true,
+                    style: {width: "22px", height: "15px", objectFit: "contain"}
+                  })
+                : react.createElement(
+                    "svg",
+                    {width: "22px", height: "15px", viewBox: "0 0 22 15", "aria-hidden": true},
+                    react.createElement(
+                      "g",
+                      {transform: "translate(11, -3) rotate(45.000000)"},
+                      react.createElement("rect", {fill: "#535C6C", x: "0", y: "5", width: "10", height: "10"}),
+                      react.createElement("rect", {fill: "#1FBAD6", x: "5", y: "0", width: "10", height: "10"})
+                    )
+                  );
+
+              return react.createElement(
+                "div",
+                {
+                  className: fixed ? "logo-container" : "side-panel-logo",
+                  style: fixed
+                    ? {position: "fixed", zIndex: 10000, padding: "4px", display: "flex", alignItems: "center"}
+                    : {display: "flex", alignItems: "flex-start"}
+                },
+                react.createElement(
+                  "div",
+                  {style: {marginTop: fixed ? 0 : "3px"}},
+                  icon
+                ),
+                react.createElement(
+                  "div",
+                  {className: "logo__title", style: {marginLeft: "6px"}},
+                  react.createElement(
+                    "a",
+                    {
+                      className: "kepler_gl__logo logo__link",
+                      href: branding.appWebsite,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      style: {
+                        color: branding.appNameColor,
+                        fontFamily: "ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif",
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        letterSpacing: "1.17px",
+                        textDecoration: "none"
+                      }
+                    },
+                    react.createElement("span", {style: {color: branding.appNameColor}}, branding.appName)
+                  ),
+                  !fixed && props && props.version
+                    ? react.createElement(
+                        "div",
+                        {
+                          className: "logo__version",
+                          style: {fontSize: "10px", color: "#a0a7b4", letterSpacing: "0.83px", lineHeight: "14px"}
+                        },
+                        props.version
+                      )
+                    : null
+                )
+              );
+            };
+          }(React, branding));
+
+          /** Custom map control factory to restore export editing and chart display. **/
+          var CustomMapControlFactory = (function createCustomMapControl(react, keplerGl) {
+            var EffectControlFactory = keplerGl.EffectControlFactory;
+            var EffectManagerFactory = keplerGl.EffectManagerFactory;
+            var AnnotationControlFactory = keplerGl.AnnotationControlFactory;
+            var AnnotationManagerFactory = keplerGl.AnnotationManagerFactory;
+            var ChartControlFactory = keplerGl.ChartControlFactory;
+            var ChartManagerFactory = keplerGl.ChartManagerFactory;
+            var MapControlFactory = keplerGl.MapControlFactory;
+
+            if (
+              !EffectControlFactory ||
+              !EffectManagerFactory ||
+              !AnnotationControlFactory ||
+              !AnnotationManagerFactory ||
+              !ChartControlFactory ||
+              !ChartManagerFactory ||
+              !MapControlFactory
+            ) {
+              console.warn('kepler.gl: Export control factories not available, skipping control injection');
+              return null;
+            }
+
+            function ExportMapControlFactory(
+              EffectControl,
+              EffectManager,
+              AnnotationControl,
+              AnnotationManager,
+              ChartControl,
+              ChartManager
+            ) {
+              var args = Array.prototype.slice.call(arguments, 6);
+              var MapControl = MapControlFactory.apply(null, args);
+              var defaultActionComponents = MapControl.defaultActionComponents || [];
+
+              var ExportMapControl = function ExportMapControl(props) {
+                var readOnly = Boolean(props.readOnly);
+                var mapControls = props.mapControls || {};
+                var charts = props.charts || [];
+                var actionComponents = defaultActionComponents.filter(function(ActionComponent) {
+                  return !readOnly || ActionComponent !== AnnotationControl;
+                });
+                if (!readOnly) {
+                  actionComponents = actionComponents.concat([ChartControl, EffectControl]);
+                }
+                var showEffects = !readOnly && Boolean(mapControls.effect && mapControls.effect.active);
+                var showAnnotations = !readOnly && Boolean(mapControls.annotation && mapControls.annotation.active);
+                var showChartPanel = !readOnly && Boolean(mapControls.chart && mapControls.chart.active);
+                var hasPinnedCharts = charts.some(function(chart) { return chart.pinned !== false; });
+                var showCharts = readOnly ? charts.length > 0 : showChartPanel || hasPinnedCharts;
+                var rightPanelVisible = showEffects || showAnnotations || showCharts;
+                return react.createElement(
+                  'div',
+                  {style: {
+                    position: 'absolute',
+                    display: 'flex',
+                    top: (props.top || 0) + 'px',
+                    right: 0,
+                    zIndex: 1,
+                    maxHeight: '100%',
+                    pointerEvents: 'none'
+                  }},
+                  react.createElement(
+                    'div',
+                    {style: {position: 'relative', pointerEvents: 'all'}},
+                    react.createElement(MapControl, Object.assign({}, props, {top: 0, actionComponents: actionComponents}))
+                  ),
+                  rightPanelVisible
+                    ? react.createElement('div', {
+                        style: {
+                          maxHeight: '100%',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          pointerEvents: 'all',
+                          marginTop: '10px'
+                        }
+                      },
+                      showAnnotations ? react.createElement(AnnotationManager, null) : null,
+                      showCharts ? react.createElement(ChartManager, {
+                        panelActive: showChartPanel,
+                        isExport: readOnly
+                      }) : null,
+                      showEffects ? react.createElement(EffectManager, null) : null
+                      )
+                    : null
+                );
+              };
+
+              return ExportMapControl;
+            }
+            ExportMapControlFactory.deps = [
+              EffectControlFactory,
+              EffectManagerFactory,
+              AnnotationControlFactory,
+              AnnotationManagerFactory,
+              ChartControlFactory,
+              ChartManagerFactory
+            ].concat(MapControlFactory.deps);
+
+            return [MapControlFactory, ExportMapControlFactory];
+          }(React, KeplerGl));
+
+          var CustomPanelHeaderFactory = (function createCustomPanelHeader(react, keplerGl, BrandLogo) {
+            var PanelHeaderFactory = keplerGl.PanelHeaderFactory;
+            if (!PanelHeaderFactory) {
+              console.warn('kepler.gl: Panel header factory not available, skipping branding injection');
+              return null;
+            }
+
+            function ExportPanelHeaderFactory() {
+              var PanelHeader = PanelHeaderFactory.apply(null, arguments);
+              return function ExportPanelHeader(props) {
+                return react.createElement(
+                  PanelHeader,
+                  Object.assign({}, props, {logoComponent: BrandLogo})
+                );
+              };
+            }
+            ExportPanelHeaderFactory.deps = PanelHeaderFactory.deps;
+            return [PanelHeaderFactory, ExportPanelHeaderFactory];
+          }(React, KeplerGl, BrandLogo));
+
+          var CustomFactories = [CustomMapControlFactory, CustomPanelHeaderFactory].filter(Boolean);
+          var KeplerGlComponent = CustomFactories.length
+            ? KeplerGl.injectComponents(CustomFactories)
+            : KeplerGl.KeplerGl;
+
+          var KeplerElement = (function makeKeplerElement(react, keplerGl, mapboxToken, branding, BrandLogo) {
+            return function App() {
+              var rootElm = react.useRef(null);
+              var _useState = react.useState({
+                width: window.innerWidth,
+                height: window.innerHeight
+              });
+              var windowDimension = _useState[0];
+              var setDimension = _useState[1];
+              react.useEffect(function sideEffect(){
+                function handleResize() {
+                  setDimension({width: window.innerWidth, height: window.innerHeight});
+                };
+                window.addEventListener('resize', handleResize);
+                return function() {window.removeEventListener('resize', handleResize);};
+              }, []);
+              // Remove the loading overlay after the first render is painted.
+              // useEffect fires post-commit, so this is safe under React 19's
+              // concurrent renderer — the map is visible before the overlay goes away.
+              react.useEffect(function removeLoadScreen() {
+                var loadScreen = document.getElementById('kepler-load-screen');
+                if (loadScreen) loadScreen.remove();
+              }, []);
+              return react.createElement(
+                'div',
+                {style: {position: 'absolute', left: 0, width: '100vw', height: '100vh'}},
+                react.createElement(BrandLogo, {fixed: true}),
+                react.createElement(KeplerGlComponent, {
+                  mapboxApiAccessToken: mapboxToken,
+                  id: "map",
+                  width: windowDimension.width,
+                  height: windowDimension.height,
+                  appName: branding.appName,
+                  appWebsite: branding.appWebsite
+                })
+              )
+            }
+          }(React, KeplerGl, MAPBOX_TOKEN, branding, BrandLogo));
+
+          const app = (function createReactReduxProvider(react, reactRedux, KeplerElement) {
+            return react.createElement(
+              reactRedux.Provider,
+              {store},
+              react.createElement(KeplerElement, null)
+            )
+          }(React, ReactRedux, KeplerElement));
+          /** END COMPONENTS **/
+
+          /** Render **/
+          (function render(react, reactDOM, app) {
+            const container = document.getElementById('app');
+            const root = reactDOM.createRoot(container);
+            root.render(app);
+          }(React, ReactDOM, app));
+
+          /**
+           * Customize map.
+           * In the following section you can use the store object to dispatch Kepler.gl actions
+           * to add new data and customize behavior
+           */
+          (function customize(keplerGl, store) {
+            const datasets = [{"version":"v1","data":{"id":"-zfdx0a","label":"ACLED Data_2026-11-26_event_date_from_2026-11-14_event_date_to_2026-11-20.csv","color":[143,47,191],"allData":[["2026-11-14","Europe","Albania","Tirana","Riots","Violent demonstration",1,0,0,"Demonstrations",41.253,19.81],["2026-11-14","Europe","Albania","Tirana","Protests","Peaceful protest",3,0,0,"Demonstrations",41.253,19.81],["2026-11-14","Europe","Albania","Tirana","Protests","Protest with intervention",2,0,0,"Demonstrations",41.253,19.81],["2026-11-14","Europe","Austria","Burgenland","Protests","Peaceful protest",1,0,0,"Demonstrations",47.475,16.488],["2026-11-14","Europe","Austria","Karnten","Protests","Peaceful protest",1,0,0,"Demonstrations",46.752,13.939],["2026-11-14","Europe","Austria","Niederosterreich","Protests","Peaceful protest",1,0,0,"Demonstrations",48.222,15.577],["2026-11-14","Europe","Austria","Oberosterreich","Protests","Peaceful protest",1,0,0,"Demonstrations",48.117,13.624],["2026-11-14","Europe","Austria","Salzburg","Protests","Peaceful protest",1,0,0,"Demonstrations",47.493,13.293],["2026-11-14","Europe","Austria","Steiermark","Protests","Peaceful protest",2,0,0,"Demonstrations",47.22,14.976],["2026-11-14","Europe","Austria","Wien","Protests","Peaceful protest",5,0,0,"Demonstrations",48.221,16.373],["2026-11-14","Europe","Austria","Wien","Protests","Protest with intervention",1,0,0,"Demonstrations",48.221,16.373],["2026-11-14","Europe","Belgium","Brussels","Protests","Peaceful protest",5,0,0,"Demonstrations",50.839,4.375],["2026-11-14","Europe","Belgium","Vlaanderen","Protests","Peaceful protest",2,0,0,"Demonstrations",51.096,4.198],["2026-11-14","Europe","Belgium","Wallonie","Protests","Peaceful protest",1,0,0,"Demonstrations",50.154,5.399],["2026-11-14","Europe","Bosnia and Herzegovina","Federation of Bosnia and Herzegovina","Protests","Peaceful protest",3,0,0,"Demonstrations",43.915,17.549],["2026-11-14","Europe","Bosnia and Herzegovina","Republika Srpska","Protests","Peaceful protest",1,0,0,"Demonstrations",44.67,17.366],["2026-11-14","Europe","Bulgaria","Blagoevgrad","Protests","Peaceful protest",1,0,0,"Demonstrations",41.75,23.488],["2026-11-14","Europe","Bulgaria","Dobrich","Protests","Peaceful protest",1,0,0,"Demonstrations",43.664,27.9],["2026-11-14","Europe","Bulgaria","Plovdiv","Protests","Peaceful protest",1,0,0,"Demonstrations",42.239,24.789],["2026-11-14","Europe","Bulgaria","Sofia City","Protests","Peaceful protest",4,0,0,"Demonstrations",42.651,23.333],["2026-11-14","Europe","Bulgaria","Stara Zagora","Protests","Peaceful protest",1,0,0,"Demonstrations",42.412,25.551],["2026-11-14","Europe","Bulgaria","Varna","Protests","Peaceful protest",1,0,0,"Demonstrations",43.214,27.62],["2026-11-14","Europe","Croatia","City of Zagreb","Protests","Peaceful protest",3,0,0,"Demonstrations",45.792,15.982],["2026-11-14","Europe","Croatia","Dubrovnik-Neretva","Protests","Peaceful protest",1,0,0,"Demonstrations",42.944,16.913],["2026-11-14","Europe","Croatia","Istria","Protests","Peaceful protest",2,0,0,"Demonstrations",45.143,13.912],["2026-11-14","Europe","Croatia","Medimurje","Protests","Peaceful protest",1,0,0,"Demonstrations",46.423,16.483],["2026-11-14","Europe","Croatia","Osijek-Baranja","Protests","Peaceful protest",1,0,0,"Demonstrations",45.564,18.437],["2026-11-14","Europe","Croatia","Primorje-Gorski Kotar","Protests","Peaceful protest",1,0,0,"Demonstrations",45.353,14.76],["2026-11-14","Europe","Croatia","Split-Dalmatia","Protests","Peaceful protest",2,0,0,"Demonstrations",43.532,16.781],["2026-11-14","Europe","Croatia","Varazdin","Protests","Peaceful protest",1,0,0,"Demonstrations",46.208,16.443],["2026-11-14","Europe","Croatia","Zadar","Protests","Peaceful protest",1,0,0,"Demonstrations",44.176,15.344],["2026-11-14","Europe","Cyprus","Larnaca","Protests","Protest with intervention",1,0,0,"Demonstrations",34.911,33.469],["2026-11-14","Europe","Cyprus","Larnaca","Protests","Peaceful protest",2,0,0,"Demonstrations",34.911,33.469],["2026-11-14","Europe","Cyprus","Nicosia","Protests","Peaceful protest",1,0,0,"Demonstrations",35.082,33.073],["2026-11-14","Europe","Czech Republic","Plzen","Protests","Peaceful protest",1,0,0,"Demonstrations",49.523,13.206],["2026-11-14","Europe","Czech Republic","Prague","Protests","Peaceful protest",4,0,0,"Demonstrations",50.06,14.446],["2026-11-14","Europe","Czech Republic","Vysocina","Protests","Peaceful protest",1,0,0,"Demonstrations",49.399,15.57],["2026-11-14","Europe","Denmark","Hovedstaden","Protests","Peaceful protest",1,0,0,"Demonstrations",55.869,12.308],["2026-11-14","Europe","Denmark","Midtjylland","Protests","Peaceful protest",1,0,0,"Demonstrations",56.222,9.22],["2026-11-14","Europe","Finland","Lappi","Protests","Peaceful protest",1,0,0,"Demonstrations",67.843,26.544],["2026-11-14","Europe","Finland","Pohjois-Savo","Protests","Peaceful protest",1,0,0,"Demonstrations",63.088,27.53],["2026-11-14","Europe","Finland","Uusimaa","Protests","Peaceful protest",4,0,0,"Demonstrations",60.324,24.629],["2026-11-14","Europe","Finland","Uusimaa","Protests","Protest with intervention",1,0,0,"Demonstrations",60.324,24.629],["2026-11-14","Europe","Finland","Varsinais-Suomi","Protests","Peaceful protest",1,0,0,"Demonstrations",60.595,22.868],["2026-11-14","Europe","France","Auvergne-Rhone-Alpes","Protests","Peaceful protest",41,0,0,"Demonstrations",45.46,4.799],["2026-11-14","Europe","France","Auvergne-Rhone-Alpes","Protests","Protest with intervention",8,0,0,"Demonstrations",45.46,4.799],["2026-11-14","Europe","France","Auvergne-Rhone-Alpes","Riots","Violent demonstration",6,0,0,"Demonstrations",45.46,4.799],["2026-11-14","Europe","France","Auvergne-Rhone-Alpes","Riots","Mob violence",5,0,0,"Political violence",45.46,4.799],["2026-11-14","Europe","France","Bourgogne-Franche-Comte","Protests","Peaceful protest",19,0,0,"Demonstrations",47.278,4.951],["2026-11-14","Europe","France","Bourgogne-Franche-Comte","Riots","Violent demonstration",2,0,0,"Demonstrations",47.278,4.951],["2026-11-14","Europe","France","Bourgogne-Franche-Comte","Protests","Protest with intervention",1,0,0,"Demonstrations",47.278,4.951],["2026-11-14","Europe","France","Bretagne","Riots","Violent demonstration",3,0,0,"Demonstrations",48.162,-2.684],["2026-11-14","Europe","France","Bretagne","Protests","Peaceful protest",36,0,0,"Demonstrations",48.162,-2.684],["2026-11-14","Europe","France","Bretagne","Protests","Protest with intervention",2,0,0,"Demonstrations",48.162,-2.684],["2026-11-14","Europe","France","Bretagne","Riots","Mob violence",1,0,0,"Political violence",48.162,-2.684],["2026-11-14","Europe","France","Centre-Val de Loire","Protests","Peaceful protest",20,0,0,"Demonstrations",47.644,1.716],["2026-11-14","Europe","France","Corse","Protests","Peaceful protest",1,0,0,"Demonstrations",42.188,9.068],["2026-11-14","Europe","France","Corse","Explosions/Remote violence","Remote explosive/landmine/IED",1,0,0,"Political violence",42.188,9.068],["2026-11-14","Europe","France","Grand Est","Protests","Peaceful protest",18,0,0,"Demonstrations",48.795,5.759],["2026-11-14","Europe","France","Grand Est","Protests","Protest with intervention",5,0,0,"Demonstrations",48.795,5.759],["2026-11-14","Europe","France","Grand Est","Riots","Violent demonstration",4,0,0,"Demonstrations",48.795,5.759],["2026-11-14","Europe","France","Hauts-de-France","Protests","Peaceful protest",8,0,0,"Demonstrations",49.963,2.889],["2026-11-14","Europe","France","Hauts-de-France","Riots","Violent demonstration",2,0,0,"Demonstrations",49.963,2.889],["2026-11-14","Europe","France","Hauts-de-France","Riots","Mob violence",1,0,0,"Political violence",49.963,2.889],["2026-11-14","Europe","France","Hauts-de-France","Protests","Protest with intervention",1,0,0,"Demonstrations",49.963,2.889],["2026-11-14","Europe","France","Ile-de-France","Protests","Peaceful protest",15,0,0,"Demonstrations",48.681,2.53],["2026-11-14","Europe","France","Ile-de-France","Riots","Violent demonstration",3,0,0,"Demonstrations",48.681,2.53],["2026-11-14","Europe","France","Ile-de-France","Protests","Protest with intervention",1,0,0,"Demonstrations",48.681,2.53],["2026-11-14","Europe","France","Ile-de-France","Riots","Mob violence",2,0,0,"Political violence",48.681,2.53],["2026-11-14","Europe","France","Normandie","Protests","Peaceful protest",19,0,0,"Demonstrations",49.126,0.026],["2026-11-14","Europe","France","Normandie","Riots","Violent demonstration",4,0,0,"Demonstrations",49.126,0.026],["2026-11-14","Europe","France","Nouvelle-Aquitaine","Protests","Peaceful protest",46,0,0,"Demonstrations",44.977,0.105],["2026-11-14","Europe","France","Nouvelle-Aquitaine","Riots","Violent demonstration",2,0,0,"Demonstrations",44.977,0.105],["2026-11-14","Europe","France","Occitanie","Protests","Peaceful protest",36,0,0,"Demonstrations",43.69,2.118],["2026-11-14","Europe","France","Occitanie","Riots","Violent demonstration",1,0,0,"Demonstrations",43.69,2.118],["2026-11-14","Europe","France","Occitanie","Protests","Protest with intervention",2,0,0,"Demonstrations",43.69,2.118],["2026-11-14","Europe","France","Occitanie","Riots","Mob violence",1,0,0,"Political violence",43.69,2.118],["2026-11-14","Europe","France","Pays de la Loire","Riots","Violent demonstration",2,0,0,"Demonstrations",47.417,-1.127],["2026-11-14","Europe","France","Pays de la Loire","Protests","Peaceful protest",31,0,0,"Demonstrations",47.417,-1.127],["2026-11-14","Europe","France","Pays de la Loire","Protests","Protest with intervention",2,0,0,"Demonstrations",47.417,-1.127],["2026-11-14","Europe","France","Provence-Alpes-Cote d'Azur","Protests","Peaceful protest",21,0,0,"Demonstrations",44.076,6.237],["2026-11-14","Europe","France","Provence-Alpes-Cote d'Azur","Violence against civilians","Attack",2,0,0,"Political violence",44.076,6.237],["2026-11-14","Europe","France","Provence-Alpes-Cote d'Azur","Riots","Violent demonstration",2,0,0,"Demonstrations",44.076,6.237],["2026-11-14","Europe","France","Provence-Alpes-Cote d'Azur","Protests","Protest with intervention",2,0,0,"Demonstrations",44.076,6.237],["2026-11-14","Europe","Germany","Baden-Wurttemberg","Protests","Peaceful protest",15,0,0,"Demonstrations",48.626,9.066],["2026-11-14","Europe","Germany","Baden-Wurttemberg","Protests","Protest with intervention",3,0,0,"Demonstrations",48.626,9.066],["2026-11-14","Europe","Germany","Bayern","Protests","Peaceful protest",5,0,0,"Demonstrations",48.917,12.048],["2026-11-14","Europe","Germany","Bayern","Riots","Violent demonstration",1,0,0,"Demonstrations",48.917,12.048],["2026-11-14","Europe","Germany","Berlin","Protests","Peaceful protest",4,0,0,"Demonstrations",52.507,13.398],["2026-11-14","Europe","Germany","Berlin","Protests","Protest with intervention",1,0,0,"Demonstrations",52.507,13.398],["2026-11-14","Europe","Germany","Berlin","Riots","Violent demonstration",1,0,0,"Demonstrations",52.507,13.398],["2026-11-14","Europe","Germany","Brandenburg","Protests","Peaceful protest",5,0,0,"Demonstrations",52.459,14.159],["2026-11-14","Europe","Germany","Bremen","Protests","Peaceful protest",1,0,0,"Demonstrations",53.12,8.836],["2026-11-14","Europe","Germany","Bremen","Riots","Violent demonstration",1,0,0,"Demonstrations",53.12,8.836],["2026-11-14","Europe","Germany","Hamburg","Riots","Violent demonstration",1,0,0,"Demonstrations",53.568,9.942],["2026-11-14","Europe","Germany","Hamburg","Protests","Peaceful protest",4,0,0,"Demonstrations",53.568,9.942],["2026-11-14","Europe","Germany","Hessen","Protests","Peaceful protest",4,0,0,"Demonstrations",50.526,9.018],["2026-11-14","Europe","Germany","Hessen","Protests","Protest with intervention",1,0,0,"Demonstrations",50.526,9.018],["2026-11-14","Europe","Germany","Mecklenburg-Vorpommern","Protests","Peaceful protest",6,0,0,"Demonstrations",53.796,12.353],["2026-11-14","Europe","Germany","Niedersachsen","Protests","Peaceful protest",11,0,0,"Demonstrations",52.592,8.835],["2026-11-14","Europe","Germany","Nordrhein-Westfalen","Protests","Peaceful protest",17,0,0,"Demonstrations",51.427,7.581],["2026-11-14","Europe","Germany","Nordrhein-Westfalen","Protests","Protest with intervention",1,0,0,"Demonstrations",51.427,7.581],["2026-11-14","Europe","Germany","Rheinland-Pfalz","Protests","Peaceful protest",9,0,0,"Demonstrations",49.954,7.274],["2026-11-14","Europe","Germany","Saarland","Protests","Peaceful protest",3,0,0,"Demonstrations",49.377,6.97],["2026-11-14","Europe","Germany","Sachsen","Riots","Violent demonstration",1,0,0,"Demonstrations",50.928,13.521],["2026-11-14","Europe","Germany","Sachsen","Protests","Peaceful protest",2,0,0,"Demonstrations",50.928,13.521],["2026-11-14","Europe","Germany","Sachsen-Anhalt","Protests","Peaceful protest",4,0,0,"Demonstrations",51.991,11.559],["2026-11-14","Europe","Germany","Schleswig-Holstein","Protests","Peaceful protest",8,0,0,"Demonstrations",54.208,9.957],["2026-11-14","Europe","Germany","Thuringen","Protests","Peaceful protest",3,0,0,"Demonstrations",50.927,11.315],["2026-11-14","Europe","Greece","Attica","Protests","Peaceful protest",2,0,0,"Demonstrations",37.994,23.801],["2026-11-14","Europe","Greece","Attica","Riots","Violent demonstration",1,0,0,"Demonstrations",37.994,23.801],["2026-11-14","Europe","Greece","Macedonia-Thrace","Riots","Mob violence",1,0,0,"Political violence",40.844,23.014],["2026-11-14","Europe","Greece","Macedonia-Thrace","Protests","Protest with intervention",1,0,0,"Demonstrations",40.844,23.014],["2026-11-14","Europe","Greece","Peloponnese-Western Greece-Ionian Islands","Protests","Peaceful protest",1,0,0,"Demonstrations",37.37,22.235],["2026-11-14","Europe","Hungary","Bacs-Kiskun","Protests","Peaceful protest",1,0,0,"Demonstrations",46.52,19.345],["2026-11-14","Europe","Hungary","Budapest","Protests","Peaceful protest",1,0,0,"Demonstrations",47.48,19.147],["2026-11-14","Europe","Hungary","Jasz-Nagykun-Szolnok","Protests","Peaceful protest",1,0,0,"Demonstrations",47.216,20.52],["2026-11-14","Europe","Hungary","Zala","Protests","Peaceful protest",1,0,0,"Demonstrations",46.671,16.825],["2026-11-14","Europe","Ireland","Dublin","Protests","Peaceful protest",2,0,0,"Demonstrations",53.406,-6.288],["2026-11-14","Europe","Italy","Abruzzo","Protests","Peaceful protest",5,0,0,"Demonstrations",42.29,13.853],["2026-11-14","Europe","Italy","Basilicata","Protests","Peaceful protest",2,0,0,"Demonstrations",40.517,16.131],["2026-11-14","Europe","Italy","Calabria","Protests","Peaceful protest",1,0,0,"Demonstrations",39.03,16.645],["2026-11-14","Europe","Italy","Campania","Protests","Peaceful protest",5,0,0,"Demonstrations",40.75,14.915],["2026-11-14","Europe","Italy","Emilia-Romagna","Protests","Peaceful protest",18,0,0,"Demonstrations",44.435,11.152],["2026-11-14","Europe","Italy","Emilia-Romagna","Riots","Violent demonstration",1,0,0,"Demonstrations",44.435,11.152],["2026-11-14","Europe","Italy","Friuli-Venezia Giulia","Protests","Peaceful protest",2,0,0,"Demonstrations",46.115,13.048],["2026-11-14","Europe","Italy","Lazio","Riots","Violent demonstration",1,0,0,"Demonstrations",42.021,12.499],["2026-11-14","Europe","Italy","Lazio","Protests","Peaceful protest",11,0,0,"Demonstrations",42.021,12.499],["2026-11-14","Europe","Italy","Liguria","Protests","Peaceful protest",4,0,0,"Demonstrations",44.227,9.683],["2026-11-14","Europe","Italy","Lombardia","Protests","Peaceful protest",35,0,0,"Demonstrations",45.657,9.679],["2026-11-14","Europe","Italy","Marche","Protests","Peaceful protest",9,0,0,"Demonstrations",43.328,13.255],["2026-11-14","Europe","Italy","Molise","Protests","Peaceful protest",1,0,0,"Demonstrations",41.718,14.626],["2026-11-14","Europe","Italy","Piemonte","Riots","Violent demonstration",1,0,0,"Demonstrations",45.262,7.835],["2026-11-14","Europe","Italy","Piemonte","Protests","Peaceful protest",2,0,0,"Demonstrations",45.262,7.835],["2026-11-14","Europe","Italy","Puglia","Protests","Peaceful protest",7,0,0,"Demonstrations",40.871,16.821],["2026-11-14","Europe","Italy","Sardegna","Protests","Peaceful protest",4,0,0,"Demonstrations",40.062,9.098],["2026-11-14","Europe","Italy","Sicilia","Protests","Peaceful protest",13,0,0,"Demonstrations",37.475,14.138],["2026-11-14","Europe","Italy","Toscana","Protests","Peaceful protest",13,0,0,"Demonstrations",43.417,11.218],["2026-11-14","Europe","Italy","Trentino-Alto Adige","Protests","Peaceful protest",5,0,0,"Demonstrations",46.383,11.222],["2026-11-14","Europe","Italy","Umbria","Protests","Peaceful protest",3,0,0,"Demonstrations",42.991,12.431],["2026-11-14","Europe","Italy","Valle d'Aosta","Protests","Peaceful protest",1,0,0,"Demonstrations",45.727,7.372],["2026-11-14","Europe","Italy","Veneto","Riots","Violent demonstration",2,0,0,"Demonstrations",45.738,12.097],["2026-11-14","Europe","Italy","Veneto","Protests","Peaceful protest",16,0,0,"Demonstrations",45.738,12.097],["2026-11-14","Europe","Kosovo","Mitrovica","Protests","Peaceful protest",1,0,0,"Demonstrations",42.935,20.782],["2026-11-14","Europe","Kosovo","Pristina","Protests","Peaceful protest",4,0,0,"Demonstrations",42.792,21.247],["2026-11-14","Europe","Lithuania","Vilniaus","Protests","Peaceful protest",1,0,0,"Demonstrations",54.822,25.25],["2026-11-14","Europe","Malta","South Eastern","Protests","Peaceful protest",1,0,0,"Demonstrations",35.861,14.536],["2026-11-14","Europe","Moldova","Chisinau","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",47.007,28.844],["2026-11-14","Europe","Moldova","Chisinau","Protests","Peaceful protest",1,0,0,"Demonstrations",47.007,28.844],["2026-11-14","Europe","Moldova","Floresti","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",47.88,28.27],["2026-11-14","Europe","Moldova","Ocnita","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",48.355,27.441],["2026-11-14","Europe","Moldova","Orhei","Explosions/Remote violence","Air/drone strike",2,0,0,"Political violence",47.401,28.761],["2026-11-14","Europe","Moldova","Soroca","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",48.164,28.161],["2026-11-14","Europe","Montenegro","Podgorica","Protests","Peaceful protest",1,0,0,"Demonstrations",42.464,19.273],["2026-11-14","Europe","Netherlands","Flevoland","Riots","Mob violence",1,0,0,"Political violence",52.43,5.518],["2026-11-14","Europe","Netherlands","Friesland","Protests","Peaceful protest",1,0,0,"Demonstrations",53.108,5.83],["2026-11-14","Europe","Netherlands","Gelderland","Protests","Peaceful protest",3,0,0,"Demonstrations",52.127,6.085],["2026-11-14","Europe","Netherlands","Groningen","Protests","Peaceful protest",2,0,0,"Demonstrations",53.153,6.887],["2026-11-14","Europe","Netherlands","Noord-Brabant","Protests","Peaceful protest",2,0,0,"Demonstrations",51.527,5.038],["2026-11-14","Europe","Netherlands","Noord-Brabant","Protests","Protest with intervention",1,0,0,"Demonstrations",51.527,5.038],["2026-11-14","Europe","Netherlands","Noord-Holland","Protests","Peaceful protest",1,0,0,"Demonstrations",52.567,4.825],["2026-11-14","Europe","Netherlands","Overijssel","Protests","Peaceful protest",2,0,0,"Demonstrations",52.487,6.382],["2026-11-14","Europe","Netherlands","Utrecht","Protests","Peaceful protest",2,0,0,"Demonstrations",52.119,5.152],["2026-11-14","Europe","Netherlands","Zuid-Holland","Protests","Peaceful protest",5,0,0,"Demonstrations",52.015,4.475],["2026-11-14","Europe","North Macedonia","Centar","Protests","Peaceful protest",1,0,0,"Demonstrations",41.997,21.432],["2026-11-14","Europe","North Macedonia","Ohrid","Protests","Peaceful protest",1,0,0,"Demonstrations",41.081,20.846],["2026-11-14","Europe","Norway","Agder","Protests","Peaceful protest",3,0,0,"Demonstrations",58.719,8.035],["2026-11-14","Europe","Norway","Innlandet","Protests","Peaceful protest",1,0,0,"Demonstrations",61.268,10.485],["2026-11-14","Europe","Norway","More og Romsdal","Protests","Peaceful protest",1,0,0,"Demonstrations",62.845,7.518],["2026-11-14","Europe","Norway","Oslo","Protests","Peaceful protest",2,0,0,"Demonstrations",59.972,10.776],["2026-11-14","Europe","Norway","Rogaland","Protests","Peaceful protest",1,0,0,"Demonstrations",58.936,5.806],["2026-11-14","Europe","Norway","Troms og Finnmark","Protests","Peaceful protest",1,0,0,"Demonstrations",69.871,21.829],["2026-11-14","Europe","Norway","Trondelag","Protests","Peaceful protest",2,0,0,"Demonstrations",63.878,10.196],["2026-11-14","Europe","Norway","Vestfold og Telemark","Protests","Peaceful protest",1,0,0,"Demonstrations",59.396,9.063],["2026-11-14","Europe","Norway","Vestland","Protests","Peaceful protest",1,0,0,"Demonstrations",60.929,6.108],["2026-11-14","Europe","Norway","Viken","Protests","Peaceful protest",1,0,0,"Demonstrations",59.926,9.904],["2026-11-14","Europe","Poland","Dolnoslaskie","Protests","Peaceful protest",1,0,0,"Demonstrations",50.951,16.362],["2026-11-14","Europe","Poland","Lubelskie","Protests","Peaceful protest",2,0,0,"Demonstrations",51.27,22.779],["2026-11-14","Europe","Poland","Lubelskie","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",51.27,22.779],["2026-11-14","Europe","Poland","Mazowieckie","Protests","Peaceful protest",2,0,0,"Demonstrations",52.247,21.563],["2026-11-14","Europe","Poland","Podkarpackie","Explosions/Remote violence","Air/drone strike",2,0,0,"Political violence",49.911,22.179],["2026-11-14","Europe","Poland","Zachodniopomorskie","Protests","Peaceful protest",1,0,0,"Demonstrations",53.597,15.671],["2026-11-14","Europe","Portugal","Aveiro","Protests","Peaceful protest",1,0,0,"Demonstrations",40.679,-8.52],["2026-11-14","Europe","Portugal","Azores","Protests","Peaceful protest",3,0,0,"Demonstrations",37.808,-25.473],["2026-11-14","Europe","Portugal","Beja","Protests","Peaceful protest",1,0,0,"Demonstrations",37.825,-7.934],["2026-11-14","Europe","Portugal","Braga","Protests","Peaceful protest",2,0,0,"Demonstrations",41.57,-8.306],["2026-11-14","Europe","Portugal","Braganca","Protests","Peaceful protest",1,0,0,"Demonstrations",41.509,-6.773],["2026-11-14","Europe","Portugal","Castelo Branco","Protests","Peaceful protest",2,0,0,"Demonstrations",39.977,-7.445],["2026-11-14","Europe","Portugal","Coimbra","Protests","Peaceful protest",1,0,0,"Demonstrations",40.221,-8.338],["2026-11-14","Europe","Portugal","Evora","Protests","Peaceful protest",1,0,0,"Demonstrations",38.59,-7.958],["2026-11-14","Europe","Portugal","Faro","Protests","Peaceful protest",2,0,0,"Demonstrations",37.255,-8.15],["2026-11-14","Europe","Portugal","Guarda","Protests","Peaceful protest",1,0,0,"Demonstrations",40.705,-7.195],["2026-11-14","Europe","Portugal","Leiria","Protests","Peaceful protest",4,0,0,"Demonstrations",39.65,-8.875],["2026-11-14","Europe","Portugal","Lisboa","Protests","Peaceful protest",4,0,0,"Demonstrations",38.995,-9.187],["2026-11-14","Europe","Portugal","Madeira","Protests","Peaceful protest",1,0,0,"Demonstrations",32.75,-16.98],["2026-11-14","Europe","Portugal","Portalegre","Protests","Peaceful protest",1,0,0,"Demonstrations",39.208,-7.721],["2026-11-14","Europe","Portugal","Porto","Protests","Peaceful protest",2,0,0,"Demonstrations",41.237,-8.302],["2026-11-14","Europe","Portugal","Santarem","Protests","Peaceful protest",3,0,0,"Demonstrations",39.285,-8.557],["2026-11-14","Europe","Portugal","Setubal","Protests","Peaceful protest",3,0,0,"Demonstrations",38.297,-8.461],["2026-11-14","Europe","Portugal","Viana do Castelo","Protests","Peaceful protest",1,0,0,"Demonstrations",41.88,-8.52],["2026-11-14","Europe","Portugal","Vila Real","Protests","Peaceful protest",1,0,0,"Demonstrations",41.523,-7.547],["2026-11-14","Europe","Portugal","Viseu","Protests","Peaceful protest",1,0,0,"Demonstrations",40.769,-7.93],["2026-11-14","Europe","Romania","Braila","Violence against civilians","Attack",1,0,0,"Political violence",45.121,27.666],["2026-11-14","Europe","Romania","Brasov","Protests","Peaceful protest",1,0,0,"Demonstrations",45.786,25.155],["2026-11-14","Europe","Romania","Bucharest","Protests","Peaceful protest",1,0,0,"Demonstrations",44.445,26.096],["2026-11-14","Europe","Romania","Bucharest","Protests","Protest with intervention",4,0,0,"Demonstrations",44.445,26.096],["2026-11-14","Europe","Romania","Caras-Severin","Riots","Mob violence",1,0,0,"Political violence",45.127,22.076],["2026-11-14","Europe","Romania","Cluj","Protests","Peaceful protest",1,0,0,"Demonstrations",46.888,23.717],["2026-11-14","Europe","Romania","Iasi","Protests","Peaceful protest",1,0,0,"Demonstrations",47.204,27.193],["2026-11-14","Europe","Romania","Timis","Protests","Peaceful protest",5,0,0,"Demonstrations",45.691,21.632],["2026-11-14","Europe","Romania","Tulcea","Explosions/Remote violence","Air/drone strike",2,0,0,"Political violence",45.039,28.898],["2026-11-14","Europe","Russia","Astrakhan","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",47.109,47.71],["2026-11-14","Europe","Russia","Belgorod","Explosions/Remote violence","Air/drone strike",413,6,0,"Political violence",50.612,37.24],["2026-11-14","Europe","Russia","Belgorod","Protests","Peaceful protest",1,0,0,"Demonstrations",50.612,37.24],["2026-11-14","Europe","Russia","Belgorod","Explosions/Remote violence","Remote explosive/landmine/IED",2,1,0,"Political violence",50.612,37.24],["2026-11-14","Europe","Russia","Bryansk","Explosions/Remote violence","Shelling/artillery/missile attack",1,0,0,"Political violence",52.939,33.169],["2026-11-14","Europe","Russia","Bryansk","Explosions/Remote violence","Remote explosive/landmine/IED",1,1,0,"Political violence",52.939,33.169],["2026-11-14","Europe","Russia","Bryansk","Explosions/Remote violence","Air/drone strike",23,5,0,"Political violence",52.939,33.169],["2026-11-14","Europe","Russia","Chelyabinsk","Protests","Peaceful protest",1,0,0,"Demonstrations",54.178,61.43],["2026-11-14","Europe","Russia","Krasnodar","Explosions/Remote violence","Air/drone strike",7,0,0,"Political violence",45.133,38.069],["2026-11-14","Europe","Russia","Kursk","Explosions/Remote violence","Shelling/artillery/missile attack",5,0,0,"Political violence",51.673,36.163],["2026-11-14","Europe","Russia","Kursk","Explosions/Remote violence","Remote explosive/landmine/IED",2,0,0,"Political violence",51.673,36.163],["2026-11-14","Europe","Russia","Kursk","Explosions/Remote violence","Air/drone strike",29,0,0,"Political violence",51.673,36.163],["2026-11-14","Europe","Russia","Lipetsk","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",52.737,38.923],["2026-11-14","Europe","Russia","Novgorod","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",58.171,31.824],["2026-11-14","Europe","Russia","Novosibirsk","Protests","Peaceful protest",1,0,0,"Demonstrations",55.264,80.064],["2026-11-14","Europe","Russia","Oryol","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",52.795,36.417],["2026-11-14","Europe","Russia","Republic of Adygea","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",44.489,40.14],["2026-11-14","Europe","Russia","Republic of Bashkortostan","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",54.053,56.363],["2026-11-14","Europe","Russia","Republic of Tatarstan","Explosions/Remote violence","Air/drone strike",3,0,0,"Political violence",55.325,50.68],["2026-11-14","Europe","Russia","Rostov","Explosions/Remote violence","Air/drone strike",5,1,0,"Political violence",48.082,40.946],["2026-11-14","Europe","Russia","Saratov","Explosions/Remote violence","Air/drone strike",1,3,0,"Political violence",51.313,46.594],["2026-11-14","Europe","Russia","Smolensk","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",54.738,32.91],["2026-11-14","Europe","Russia","Sverdlovsk","Protests","Peaceful protest",1,0,0,"Demonstrations",58.998,62.22],["2026-11-14","Europe","Serbia","Belgrade","Protests","Peaceful protest",2,0,0,"Demonstrations",44.678,20.38],["2026-11-14","Europe","Serbia","Nisava","Protests","Peaceful protest",1,0,0,"Demonstrations",43.44,21.957],["2026-11-14","Europe","Serbia","South Backa","Protests","Peaceful protest",1,0,0,"Demonstrations",45.448,19.768],["2026-11-14","Europe","Slovakia","Banskobystricky","Protests","Peaceful protest",1,0,0,"Demonstrations",48.5,19.42],["2026-11-14","Europe","Slovakia","Bratislavsky","Protests","Peaceful protest",3,0,0,"Demonstrations",48.329,17.181],["2026-11-14","Europe","Slovakia","Kosicky","Protests","Peaceful protest",1,0,0,"Demonstrations",48.676,21.29],["2026-11-14","Europe","Slovakia","Presovsky","Protests","Peaceful protest",1,0,0,"Demonstrations",49.112,21.188],["2026-11-14","Europe","Spain","Andalucia","Protests","Protest with intervention",1,0,0,"Demonstrations",37.365,-4.542],["2026-11-14","Europe","Spain","Andalucia","Protests","Peaceful protest",13,0,0,"Demonstrations",37.365,-4.542],["2026-11-14","Europe","Spain","Aragon","Protests","Peaceful protest",3,0,0,"Demonstrations",41.385,-0.84],["2026-11-14","Europe","Spain","Asturias","Protests","Peaceful protest",2,0,0,"Demonstrations",43.271,-5.854],["2026-11-14","Europe","Spain","Canarias","Protests","Peaceful protest",3,0,0,"Demonstrations",28.293,-16.622],["2026-11-14","Europe","Spain","Cantabria","Protests","Peaceful protest",2,0,0,"Demonstrations",43.136,-4.264],["2026-11-14","Europe","Spain","Castilla y Leon","Protests","Peaceful protest",6,0,0,"Demonstrations",41.66,-4.079],["2026-11-14","Europe","Spain","Castilla-La Mancha","Protests","Peaceful protest",1,0,0,"Demonstrations",39.675,-3.273],["2026-11-14","Europe","Spain","Cataluna","Protests","Peaceful protest",8,0,0,"Demonstrations",41.692,1.584],["2026-11-14","Europe","Spain","Cataluna","Protests","Protest with intervention",3,0,0,"Demonstrations",41.692,1.584],["2026-11-14","Europe","Spain","Cataluna","Riots","Violent demonstration",2,0,0,"Demonstrations",41.692,1.584],["2026-11-14","Europe","Spain","Extremadura","Protests","Peaceful protest",1,0,0,"Demonstrations",39.214,-5.973],["2026-11-14","Europe","Spain","Galicia","Protests","Peaceful protest",17,0,0,"Demonstrations",42.799,-7.885],["2026-11-14","Europe","Spain","Islas Baleares","Protests","Peaceful protest",4,0,0,"Demonstrations",39.614,2.889],["2026-11-14","Europe","Spain","Madrid","Riots","Violent demonstration",1,0,0,"Demonstrations",40.525,-3.771],["2026-11-14","Europe","Spain","Madrid","Protests","Peaceful protest",11,0,0,"Demonstrations",40.525,-3.771],["2026-11-14","Europe","Spain","Murcia","Protests","Peaceful protest",2,0,0,"Demonstrations",38.063,-1.672],["2026-11-14","Europe","Spain","Navarra","Protests","Peaceful protest",3,0,0,"Demonstrations",42.612,-1.839],["2026-11-14","Europe","Spain","Pais Vasco","Protests","Peaceful protest",8,0,0,"Demonstrations",42.965,-2.563],["2026-11-14","Europe","Spain","Pais Vasco","Riots","Violent demonstration",1,0,0,"Demonstrations",42.965,-2.563],["2026-11-14","Europe","Spain","Valencia","Protests","Peaceful protest",16,0,0,"Demonstrations",39.316,-0.748],["2026-11-14","Europe","Sweden","Dalarnas","Protests","Peaceful protest",1,0,0,"Demonstrations",61.06,14.215],["2026-11-14","Europe","Sweden","Ostergotlands","Protests","Peaceful protest",2,0,0,"Demonstrations",58.369,15.627],["2026-11-14","Europe","Sweden","Skane","Protests","Peaceful protest",2,0,0,"Demonstrations",55.935,13.554],["2026-11-14","Europe","Sweden","Stockholms","Protests","Peaceful protest",6,0,0,"Demonstrations",59.499,17.975],["2026-11-14","Europe","Sweden","Uppsala","Protests","Peaceful protest",1,0,0,"Demonstrations",60.031,17.59],["2026-11-14","Europe","Sweden","Vasterbottens","Protests","Peaceful protest",1,0,0,"Demonstrations",64.904,18.053],["2026-11-14","Europe","Sweden","Vastra Gotalands","Protests","Peaceful protest",1,0,0,"Demonstrations",58.21,13.165],["2026-11-14","Europe","Switzerland","Basel-Stadt","Riots","Violent demonstration",1,0,0,"Demonstrations",47.559,7.591],["2026-11-14","Europe","Switzerland","Bern","Protests","Peaceful protest",3,0,0,"Demonstrations",46.823,7.617],["2026-11-14","Europe","Switzerland","Geneve","Protests","Peaceful protest",3,0,0,"Demonstrations",46.223,6.078],["2026-11-14","Europe","Switzerland","Neuchatel","Protests","Peaceful protest",1,0,0,"Demonstrations",47.007,6.835],["2026-11-14","Europe","Switzerland","St. Gallen","Protests","Peaceful protest",1,0,0,"Demonstrations",47.203,9.23],["2026-11-14","Europe","Switzerland","Ticino","Protests","Peaceful protest",1,0,0,"Demonstrations",46.226,8.793],["2026-11-14","Europe","Switzerland","Vaud","Riots","Violent demonstration",1,0,0,"Demonstrations",46.561,6.518],["2026-11-14","Europe","Switzerland","Vaud","Protests","Peaceful protest",2,0,0,"Demonstrations",46.561,6.518],["2026-11-14","Europe","Switzerland","Zurich","Protests","Protest with intervention",1,0,0,"Demonstrations",47.426,8.651],["2026-11-14","Europe","Ukraine","Cherkasy","Explosions/Remote violence","Shelling/artillery/missile attack",1,0,0,"Political violence",49.34,31.605],["2026-11-14","Europe","Ukraine","Cherkasy","Explosions/Remote violence","Air/drone strike",8,0,0,"Political violence",49.34,31.605],["2026-11-14","Europe","Ukraine","Chernihiv","Explosions/Remote violence","Air/drone strike",70,5,0,"Political violence",51.362,31.836],["2026-11-14","Europe","Ukraine","Chernihiv","Explosions/Remote violence","Shelling/artillery/missile attack",16,0,0,"Political violence",51.362,31.836],["2026-11-14","Europe","Ukraine","Chernivtsi","Explosions/Remote violence","Air/drone strike",2,0,0,"Political violence",48.2,25.775],["2026-11-14","Europe","Ukraine","Crimea","Explosions/Remote violence","Shelling/artillery/missile attack",1,0,0,"Political violence",45.306,34.142],["2026-11-14","Europe","Ukraine","Crimea","Explosions/Remote violence","Air/drone strike",6,4,0,"Political violence",45.306,34.142],["2026-11-14","Europe","Ukraine","Dnipropetrovsk","Explosions/Remote violence","Shelling/artillery/missile attack",23,22,0,"Political violence",48.323,35.165],["2026-11-14","Europe","Ukraine","Dnipropetrovsk","Battles","Armed clash",17,12,0,"Political violence",48.323,35.165],["2026-11-14","Europe","Ukraine","Dnipropetrovsk","Explosions/Remote violence","Air/drone strike",77,7,0,"Political violence",48.323,35.165],["2026-11-14","Europe","Ukraine","Donetsk","Explosions/Remote violence","Shelling/artillery/missile attack",51,67,0,"Political violence",48.046,37.839],["2026-11-14","Europe","Ukraine","Donetsk","Explosions/Remote violence","Air/drone strike",89,54,0,"Political violence",48.046,37.839],["2026-11-14","Europe","Ukraine","Donetsk","Battles","Armed clash",177,348,0,"Political violence",48.046,37.839],["2026-11-14","Europe","Ukraine","Donetsk","Explosions/Remote violence","Remote explosive/landmine/IED",1,0,0,"Political violence",48.046,37.839],["2026-11-14","Europe","Ukraine","Donetsk","Battles","Non-state actor overtakes territory",1,4,0,"Political violence",48.046,37.839],["2026-11-14","Europe","Ukraine","Ivano-Frankivsk","Explosions/Remote violence","Air/drone strike",7,0,0,"Political violence",48.633,24.691],["2026-11-14","Europe","Ukraine","Kharkiv","Explosions/Remote violence","Remote explosive/landmine/IED",4,1,0,"Political violence",49.499,36.665],["2026-11-14","Europe","Ukraine","Kharkiv","Explosions/Remote violence","Air/drone strike",106,32,0,"Political violence",49.499,36.665],["2026-11-14","Europe","Ukraine","Kharkiv","Explosions/Remote violence","Shelling/artillery/missile attack",31,27,0,"Political violence",49.499,36.665],["2026-11-14","Europe","Ukraine","Kharkiv","Battles","Armed clash",80,28,0,"Political violence",49.499,36.665],["2026-11-14","Europe","Ukraine","Kherson","Explosions/Remote violence","Air/drone strike",289,84,0,"Political violence",46.776,33.484],["2026-11-14","Europe","Ukraine","Kherson","Battles","Armed clash",5,251,0,"Political violence",46.776,33.484],["2026-11-14","Europe","Ukraine","Kherson","Explosions/Remote violence","Shelling/artillery/missile attack",2,0,0,"Political violence",46.776,33.484],["2026-11-14","Europe","Ukraine","Khmelnytskyi","Explosions/Remote violence","Air/drone strike",2,0,0,"Political violence",49.527,26.95],["2026-11-14","Europe","Ukraine","Khmelnytskyi","Protests","Peaceful protest",1,0,0,"Demonstrations",49.527,26.95],["2026-11-14","Europe","Ukraine","Kirovohrad","Explosions/Remote violence","Air/drone strike",7,1,0,"Political violence",48.335,32.244],["2026-11-14","Europe","Ukraine","Kyiv","Explosions/Remote violence","Air/drone strike",15,1,0,"Political violence",50.354,31.426],["2026-11-14","Europe","Ukraine","Kyiv City","Explosions/Remote violence","Shelling/artillery/missile attack",9,9,0,"Political violence",50.402,30.616],["2026-11-14","Europe","Ukraine","Kyiv City","Explosions/Remote violence","Air/drone strike",15,3,0,"Political violence",50.402,30.616],["2026-11-14","Europe","Ukraine","Luhansk","Explosions/Remote violence","Air/drone strike",27,20,0,"Political violence",48.956,38.891],["2026-11-14","Europe","Ukraine","Luhansk","Battles","Armed clash",4,0,0,"Political violence",48.956,38.891],["2026-11-14","Europe","Ukraine","Lviv","Explosions/Remote violence","Air/drone strike",5,2,0,"Political violence",49.68,23.894],["2026-11-14","Europe","Ukraine","Mykolaiv","Explosions/Remote violence","Air/drone strike",13,2,0,"Political violence",47.416,31.96],["2026-11-14","Europe","Ukraine","Odesa","Explosions/Remote violence","Air/drone strike",13,4,0,"Political violence",46.729,30.562],["2026-11-14","Europe","Ukraine","Poltava","Explosions/Remote violence","Air/drone strike",8,0,0,"Political violence",49.639,34.076],["2026-11-14","Europe","Ukraine","Poltava","Explosions/Remote violence","Shelling/artillery/missile attack",1,0,0,"Political violence",49.639,34.076],["2026-11-14","Europe","Ukraine","Rivne","Explosions/Remote violence","Air/drone strike",5,0,0,"Political violence",50.978,26.649],["2026-11-14","Europe","Ukraine","Sumy","Explosions/Remote violence","Shelling/artillery/missile attack",166,13,0,"Political violence",51.239,33.676],["2026-11-14","Europe","Ukraine","Sumy","Explosions/Remote violence","Air/drone strike",94,8,0,"Political violence",51.239,33.676],["2026-11-14","Europe","Ukraine","Sumy","Battles","Armed clash",16,7,0,"Political violence",51.239,33.676],["2026-11-14","Europe","Ukraine","Sumy","Explosions/Remote violence","Remote explosive/landmine/IED",1,0,0,"Political violence",51.239,33.676],["2026-11-14","Europe","Ukraine","Ternopil","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",49.387,25.525],["2026-11-14","Europe","Ukraine","Vinnytsia","Explosions/Remote violence","Air/drone strike",5,1,0,"Political violence",48.982,28.539],["2026-11-14","Europe","Ukraine","Zakarpattia","Explosions/Remote violence","Air/drone strike",1,0,0,"Political violence",48.497,23.035],["2026-11-14","Europe","Ukraine","Zaporizhia","Explosions/Remote violence","Air/drone strike",341,59,0,"Political violence",47.204,35.696],["2026-11-14","Europe","Ukraine","Zaporizhia","Explosions/Remote violence","Shelling/artillery/missile attack",17,20,0,"Political violence",47.204,35.696],["2026-11-14","Europe","Ukraine","Zaporizhia","Battles","Armed clash",58,13,0,"Political violence",47.204,35.696],["2026-11-14","Europe","Ukraine","Zhytomyr","Explosions/Remote violence","Air/drone strike",5,0,0,"Political violence",50.631,28.334],["2026-11-14","Europe","United Kingdom","England","Protests","Peaceful protest",20,0,0,"Demonstrations",52.884,-1.577],["2026-11-14","Europe","United Kingdom","England","Riots","Violent demonstration",1,0,0,"Demonstrations",52.884,-1.577],["2026-11-14","Europe","United Kingdom","Northern Ireland","Violence against civilians","Attack",1,0,0,"Political violence",54.637,-6.857],["2026-11-14","Europe","United Kingdom","Northern Ireland","Protests","Peaceful protest",2,0,0,"Demonstrations",54.637,-6.857],["2026-11-14","Europe","United Kingdom","Northern Ireland","Riots","Mob violence",1,0,0,"Political violence",54.637,-6.857],["2026-11-14","Europe","United Kingdom","Scotland","Protests","Peaceful protest",3,0,0,"Demonstrations",56.653,-3.912],["2026-11-14","Europe","United Kingdom","Scotland","Protests","Protest with intervention",1,0,0,"Demonstrations",56.653,-3.912]],"fields":[{"name":"week","type":"date","format":"YYYY-M-D","analyzerType":"DATE"},{"name":"region","type":"string","format":"","analyzerType":"STRING"},{"name":"country","type":"string","format":"","analyzerType":"STRING"},{"name":"admin1","type":"string","format":"","analyzerType":"STRING"},{"name":"event_type","type":"string","format":"","analyzerType":"STRING"},{"name":"sub_event_type","type":"string","format":"","analyzerType":"STRING"},{"name":"events","type":"integer","format":"","analyzerType":"INT"},{"name":"fatalities","type":"integer","format":"","analyzerType":"INT"},{"name":"population_exposure","type":"integer","format":"","analyzerType":"INT"},{"name":"disorder_type","type":"string","format":"","analyzerType":"STRING"},{"name":"centroid_latitude","type":"real","format":"","analyzerType":"FLOAT"},{"name":"centroid_longitude","type":"real","format":"","analyzerType":"FLOAT"}],"type":"","metadata":{"id":"-zfdx0a","format":"row","label":"ACLED Data_2026-11-26_event_date_from_2026-11-14_event_date_to_2026-11-20.csv","size":35931},"disableDataOperation":false}}];
+            const config = {"version":"v1","config":{"visState":{"filters":[{"dataId":["-zfdx0a"],"id":"pzdixwty","name":["week"],"type":"multiSelect","value":[],"plotType":{"type":"histogram"},"animationWindow":"free","yAxis":null,"view":"side","speed":1,"enabled":true,"inverted":true}],"layers":[{"id":"vd31qjo","type":"point","config":{"dataId":"-zfdx0a","columnMode":"points","label":"new layer","color":[231,159,213],"highlightColor":[252,242,26,255],"columns":{"lat":"centroid_latitude","lng":"centroid_longitude"},"isVisible":true,"visConfig":{"pulseTrigger":"continuous","pulseTimeField":"","pulseDurationMs":1000,"glowEnabled":false,"glowExtent":2,"glowStrength":0.5,"pulseEnabled":false,"pulseMode":"pulse","pulseSpeed":1,"pulseExpansion":2,"radius":9.8,"fixedRadius":false,"opacity":0.14,"outline":false,"thickness":2,"strokeColor":null,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"strokeColorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"radiusRange":[3.1,162.6],"filled":true,"billboard":false,"allowHover":true,"showNeighborOnHover":false,"showHighlightColor":true},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"events","type":"integer"},"colorScale":"quantile","strokeColorField":null,"strokeColorScale":"quantile","sizeField":{"name":"fatalities","type":"integer"},"sizeScale":"sqrt"}},{"id":"07p7t2i","type":"hexagon","config":{"dataId":"-zfdx0a","columnMode":"points","label":"centroid","color":[218,112,191],"highlightColor":[252,242,26,255],"columns":{"lat":"centroid_latitude","lng":"centroid_longitude"},"isVisible":true,"visConfig":{"opacity":0.8,"worldUnitSize":27.6083,"resolution":8,"colorRange":{"colors":["#0198BD","#42C1BC","#9CE3B1","#F5B272","#EB7053","#D50255"],"name":"Ice And Fire","type":"diverging","category":"Uber"},"coverage":1,"sizeRange":[0,500],"percentile":[0,100],"elevationPercentile":[0,100],"elevationScale":110.4,"enableElevationZoomFactor":true,"fixedHeight":false,"colorAggregation":"sum","sizeAggregation":"count","enable3d":true,"zeroCountHeight":false},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":{"name":"events","type":"integer"},"colorScale":"quantile","sizeField":null,"sizeScale":"linear"}}],"effects":[],"charts":[{"id":"36vjkp","title":"Count by region","type":"barChart","dataId":"-zfdx0a","applyFilters":true,"pinned":false,"display":{"isConfigActive":false,"isJsonEditorActive":false},"xAxis":{"field":{"name":"region","type":"string"},"aggregation":"uniqueBin","title":"region"},"yAxis":{"field":{"name":"fatalities","type":"integer"},"aggregation":"count","title":"fatalities"},"groupBy":{"field":null,"aggregation":"uniqueBin","title":null},"numGroups":10,"groupOthers":false,"colorBy":"category","chartDisplay":{"colorRange":{"name":"Chart Colors","type":"ordinal","category":"Uber","colors":["#12939A","#DDB27C","#88572C","#FF991F","#F15C17","#223F9A","#DA70BF","#125C77","#4DC19C","#776E57"]}}}],"annotations":[{"id":"b9mlze","kind":"POINT","isVisible":false,"autoSize":true,"autoSizeY":true,"anchorPoint":[15.310460549924063,47.36341554966964],"label":"New Annotation","mapIndex":0,"lineColor":"#FFFFFF","lineWidth":2,"textWidth":0,"textHeight":0,"textVerticalAlign":"bottom","textSide":"right","textVerticalPosition":"above","armLength":50,"angle":-45}],"interactionConfig":{"tooltip":{"fieldsToShow":{"-zfdx0a":[{"name":"week","format":"L"},{"name":"region","format":null},{"name":"country","format":null},{"name":"admin1","format":null},{"name":"event_type","format":null}]},"timezone":null,"compareMode":false,"compareType":"absolute","enabled":true},"legend":{"hideInvisibleLayers":false,"enabled":false},"brush":{"size":2.5,"enabled":false},"geocoder":{"limitSearch":false,"color":[255,0,0],"enabled":false},"coordinate":{"enabled":false},"annotation":{"enabled":false},"zoomOpacity":{"controllers":[],"enabled":false}},"layerBlending":"normal","overlayBlending":"normal","splitMaps":[{"layers":{"07p7t2i":true,"vd31qjo":false,"8c6ijyj":true}},{"layers":{"vd31qjo":true,"8c6ijyj":true,"07p7t2i":false}}],"animationConfig":{"currentTime":null,"speed":1,"timeFormat":null,"timezone":null},"editor":{"features":[],"visible":true},"layerOrder":["8c6ijyj","vd31qjo","07p7t2i"],"groupBys":[],"joins":[]},"mapState":{"bearing":24,"dragRotate":true,"latitude":51.89049707657128,"longitude":22.39224567850079,"pitch":50,"zoom":3.721965182807644,"isSplit":true,"isViewportSynced":false,"isZoomLocked":false,"splitMapViewports":[{"width":1000,"height":1000,"zoom":3.1739062658906922,"pitch":50,"bearing":24,"latitude":58.884397862045894,"longitude":13.746341922381335,"dragRotate":true,"minZoom":0,"maxZoom":20,"maxPitch":60,"maxBounds":[[null,-90],[null,90]],"altitude":1.5,"minPitch":0,"normalize":true,"position":[0,0,0],"maxBoundsPadding":null,"rubberBand":false,"transitionDuration":0},{"width":1000,"height":1000,"zoom":3.721965182807644,"pitch":50,"bearing":24,"latitude":51.89049707657128,"longitude":22.39224567850079,"dragRotate":true,"minZoom":0,"maxZoom":20,"maxPitch":60,"maxBounds":[[null,-90],[null,90]],"altitude":1.5,"minPitch":0,"normalize":true,"position":[0,0,0],"maxBoundsPadding":null,"rubberBand":false,"transitionDuration":0}],"maxPitch":60,"mapSplitMode":"DUAL_MAP","swipeComparePercentage":50,"mapViewMode":"MODE_3D","globe":{"enabled":false,"config":{"atmosphere":true,"hugeHalo":true,"hugeHaloRadius":3.5,"hugeHaloOpacity":0.2,"azimuth":false,"azimuthAngle":45,"terminator":true,"terminatorOpacity":0.35,"basemap":true,"labels":false,"labelsColor":[114.75,114.75,114.75],"adminLines":true,"adminLinesColor":[40,63,93],"water":true,"waterColor":[17,35,48],"surface":true,"surfaceColor":[9,16,29],"backgroundColor":[4,9,17],"stars":true}}},"mapStyle":{"styleType":"dark-matter","topLayerGroups":{},"visibleLayerGroups":{"label":true,"road":true,"border":false,"building":true,"water":true,"land":true,"3d building":false},"threeDBuildingColor":[15.035172933000911,15.035172933000911,15.035172933000911],"backgroundColor":[0,0,0],"mapStyles":{}},"uiState":{"mapControls":{"mapLegend":{"active":true,"settings":{"position":{"x":10,"anchorX":"right","y":30,"anchorY":"bottom"},"contentHeight":100}},"chart":{"active":false},"cameraBookmarks":{"show":false,"settings":{"position":{"x":60,"y":20,"anchorX":"right","anchorY":"top"},"contentHeight":-1}},"mapInfo":{"active":true,"show":true}},"locale":"en","theme":"dark"}}};
+            const info = null;
+
+            const loadedData = keplerGl.KeplerGlSchema.load(
+              datasets,
+              config
+            );
+
+            // The 500 ms delay is a historical workaround for a race where
+            // keplerGl re-initialises and overwrites config applied synchronously.
+            // The pre-seeded styleType above removes the basemap flash on first
+            // render; this dispatch still applies the full saved config (layers,
+            // viewport, layer groups, etc.) once the component has settled.
+            window.setTimeout(() => {
+              store.dispatch(
+                keplerGl.addDataToMap({
+                  datasets: loadedData.datasets,
+                  config: loadedData.config,
+                  info,
+                  options: {
+                    centerMap: false,
+                  },
+                })
+              );
+            }, 500);
+          }(KeplerGl, store))
+        </script>
+      </body>
+    </html>
+  
